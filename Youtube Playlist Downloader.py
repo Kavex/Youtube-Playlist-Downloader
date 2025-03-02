@@ -1,5 +1,4 @@
 # pip install yt-dlp tk
-# pip install ttkbootstrap
 
 import os
 import threading
