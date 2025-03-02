@@ -8,4 +8,3 @@ Used Python 3.10.11
 
 ```python
 pip install yt-dlp tk
-pip install ttkbootstrap
