@@ -25,4 +25,11 @@ A simple graphical tool for downloading YouTube playlists using [yt-dlp](https:/
 Install the required Python packages using pip:
 
 ```bash
-pip install yt-dlp tk
+  pip install yt-dlp tk
+```
+
+Upgrade yt-dlp:
+
+```bash
+  pip install --upgrade yt-dlp
+```
