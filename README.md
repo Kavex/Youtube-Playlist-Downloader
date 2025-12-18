@@ -29,6 +29,7 @@ Organizes songs by artist: DownloadFolder/Artist Name/Artist Name - Song Title.m
 Install the required Python packages using pip:
 
 ```bash
+<<<<<<< HEAD
   pip install spotdl spotipy
 ```
 
@@ -37,3 +38,6 @@ Upgrade:
 ```bash
   pip install --upgrade spotdl spotipy
 ```
+=======
+pip install yt-dlp tk
+>>>>>>> parent of 6074ee7 (Update README.md)
