@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 # pip install spotdl spotipy
 # spotdl requires FFmpeg
+=======
+# pip install yt-dlp tk
+# pip install ttkbootstrap
+>>>>>>> parent of d16cd1b (Update Youtube Playlist Downloader.py)
 
 import os
 import sys
