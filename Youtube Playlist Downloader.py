@@ -1,259 +1,110 @@
-<<<<<<< HEAD
-# pip install spotdl spotipy
-# spotdl requires FFmpeg
-=======
 # pip install yt-dlp tk
-# pip install ttkbootstrap
->>>>>>> parent of d16cd1b (Update Youtube Playlist Downloader.py)
 
 import os
-import sys
-import json
-import time
-import asyncio
 import threading
-import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
-from concurrent.futures import ThreadPoolExecutor
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+import yt_dlp
 
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+# Common YouTube resolutions
+RESOLUTIONS = {
+    "2160p (4K)": "bestvideo[height<=2160]+bestaudio/best",
+    "1440p": "bestvideo[height<=1440]+bestaudio/best",
+    "1080p (Full HD)": "bestvideo[height<=1080]+bestaudio/best",
+    "720p (HD)": "bestvideo[height<=720]+bestaudio/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best",
+    "360p": "bestvideo[height<=360]+bestaudio/best",
+    "240p": "bestvideo[height<=240]+bestaudio/best"
+}
 
-# ======================
-# CONFIG
-# ======================
-SPOTIFY_API_DELAY = 30
-MAX_DOWNLOAD_WORKERS = 3
-BITRATE = "192k"
-CACHE_DIR = "spotify_cache"
-
-SpotClientID = "Client ID Here"
-SpotClientSecret = "Client Secret Here"
-
-# ======================
-# GUI LOGGING
-# ======================
-def log_message(msg):
-    console_text.insert(tk.END, msg + "\n")
+def log_message(message):
+    """Function to log messages to the console window"""
+    console_text.insert(tk.END, message + "\n")
     console_text.see(tk.END)
 
-# ======================
-# UTIL
-# ======================
-def safe_name(name):
-    return "".join(c for c in name if c not in r'\/:*?"<>|').strip()
-
-# ======================
-# SPOTIFY RATE LIMITER
-# ======================
-class SpotifyRateLimiter:
-    def __init__(self, delay):
-        self.delay = delay
-        self.last_call = 0
-        self.lock = asyncio.Lock()
-
-    async def call(self, fn, *args, **kwargs):
-        async with self.lock:
-            elapsed = time.time() - self.last_call
-            if elapsed < self.delay:
-                await asyncio.sleep(self.delay - elapsed)
-
-            result = fn(*args, **kwargs)
-            self.last_call = time.time()
-            return result
-
-# ======================
-# CACHE
-# ======================
-def cache_path(playlist_id):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    return os.path.join(CACHE_DIR, f"{playlist_id}.json")
-
-def load_cache(playlist_id):
-    path = cache_path(playlist_id)
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
-def save_cache(playlist_id, data):
-    with open(cache_path(playlist_id), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-# ======================
-# SPOTIFY → QUEUE
-# ======================
-async def fetch_tracks(sp, limiter, playlist_id, queue):
-    cached = load_cache(playlist_id)
-    if cached:
-        log_message("📦 Loaded playlist metadata from cache")
-        for track in cached["tracks"]:
-            await queue.put(track)
-        return
-
-    log_message("🌐 Fetching playlist metadata (rate-limited)")
-    meta = await limiter.call(sp.playlist, playlist_id, fields=["name"])
-    log_message(f"🎵 Playlist: {meta['name']}")
-
-    results = await limiter.call(sp.playlist_items, playlist_id)
-    tracks = []
-
-    while True:
-        for item in results["items"]:
-            track = item.get("track")
-            if not track:
-                continue
-
-            artist = track["artists"][0]["name"] if track["artists"] else "Unknown Artist"
-
-            tracks.append({
-                "url": track["external_urls"]["spotify"],
-                "artist": artist,
-                "title": track["name"]
-            })
-
-        if not results["next"]:
-            break
-        results = await limiter.call(sp.next, results)
-
-    save_cache(playlist_id, {"tracks": tracks})
-    log_message(f"💾 Cached {len(tracks)} tracks")
-
-    for t in tracks:
-        await queue.put(t)
-
-# ======================
-# SPOTDL EXECUTION
-# ======================
-def run_spotdl(track, base_folder, worker_id):
-    artist = safe_name(track["artist"])
-    out_dir = os.path.join(base_folder, artist)
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Template without .mp3 (spotdl adds it automatically)
-    output_template = os.path.join(out_dir, "{artist} - {title}")
-
-    cmd = [
-        sys.executable, "-m", "spotdl", "download",
-        track["url"],
-        "--format", "mp3",
-        "--bitrate", BITRATE,
-        "--output", output_template,
-        "--overwrite", "skip"
-    ]
-
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-
-    for line in proc.stdout:
-        log_message(f"[W{worker_id}] {line.rstrip()}")
-
-    proc.wait()
-    return proc.returncode
-
-# ======================
-# WORKER
-# ======================
-async def download_worker(worker_id, queue, folder, executor):
-    loop = asyncio.get_running_loop()
-    while True:
-        track = await queue.get()
-        log_message(f"[W{worker_id}] ⬇️ {track['artist']} – {track['title']}")
-        code = await loop.run_in_executor(
-            executor,
-            run_spotdl,
-            track,
-            folder,
-            worker_id
-        )
-        if code == 0:
-            log_message(f"[W{worker_id}] ✅ Completed")
-        else:
-            log_message(f"[W{worker_id}] ❌ Failed")
-        queue.task_done()
-
-# ======================
-# ASYNC CONTROLLER
-# ======================
-async def async_controller(playlist_id, sp, folder):
-    limiter = SpotifyRateLimiter(SPOTIFY_API_DELAY)
-    queue = asyncio.Queue()
-
-    executor = ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS)
-    workers = [
-        asyncio.create_task(download_worker(i + 1, queue, folder, executor))
-        for i in range(MAX_DOWNLOAD_WORKERS)
-    ]
-
-    await fetch_tracks(sp, limiter, playlist_id, queue)
-    await queue.join()
-
-    for w in workers:
-        w.cancel()
-    executor.shutdown(wait=False)
-
-# ======================
-# TK CALLBACK
-# ======================
 def download_playlist():
-    playlist_url = url_entry.get().strip()
-    folder = folder_path.get()
-
-    if not playlist_url or not folder:
-        messagebox.showerror("Error", "Missing playlist URL or folder")
+    url = url_entry.get().strip()
+    if not url:
+        messagebox.showerror("Error", "Please enter a YouTube playlist URL")
         return
 
-    playlist_id = playlist_url.rstrip("/").split("/")[-1].split("?")[0]
+    folder = folder_path.get()
+    if not folder:
+        messagebox.showerror("Error", "Please select a download folder")
+        return
 
-    def runner():
-        try:
-            auth = SpotifyClientCredentials(
-                client_id=client_id_entry.get().strip(),
-                client_secret=client_secret_entry.get().strip()
-            )
-            sp = spotipy.Spotify(auth_manager=auth)
-            asyncio.run(async_controller(playlist_id, sp, folder))
-            messagebox.showinfo("Done", "All downloads completed")
-        except Exception as e:
-            log_message(f"❌ {e}")
-            messagebox.showerror("Error", str(e))
+    resolution = resolution_var.get()
+    format_code = RESOLUTIONS.get(resolution, "best")
 
-    threading.Thread(target=runner, daemon=True).start()
+    log_message(f"📂 Downloading playlist to: {folder}")
+    log_message(f"🎥 Selected resolution: {resolution}")
 
-# ======================
-# GUI
-# ======================
+    def run_download():
+        ydl_opts = {
+            'outtmpl': os.path.join(folder, '%(title)s.%(ext)s'),
+            'format': format_code,
+            'merge_output_format': 'mp4',
+            'progress_hooks': [progress_hook],
+            'noplaylist': False
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                ydl.download([url])
+                log_message("✅ Download complete!")
+                messagebox.showinfo("Success", "Playlist download complete!")
+            except Exception as e:
+                log_message(f"❌ Error: {e}")
+                messagebox.showerror("Download Failed", str(e))
+
+    threading.Thread(target=run_download, daemon=True).start()
+
+def progress_hook(d):
+    """Handles download progress updates"""
+    if d['status'] == 'downloading':
+        log_message(f"⬇️ Downloading: {d['filename']} - {d['_percent_str']}")
+
+def choose_folder():
+    """Opens folder selection dialog"""
+    folder_selected = filedialog.askdirectory()
+    folder_path.set(folder_selected)
+
+# GUI Setup
 root = tk.Tk()
-root.title("Spotify Playlist Downloader")
-root.geometry("780x650")
+root.title("YouTube Playlist Downloader (yt-dlp)")
+root.geometry("600x450")
 
-tk.Label(root, text="Client ID").pack()
-client_id_entry = tk.Entry(root, width=75)
-client_id_entry.insert(0, SpotClientID)
-client_id_entry.pack()
+# URL Input
+tk.Label(root, text="YouTube Playlist URL:").pack(pady=5)
+url_entry = tk.Entry(root, width=60)
+url_entry.pack(pady=5)
 
-tk.Label(root, text="Client Secret").pack()
-client_secret_entry = tk.Entry(root, width=75)
-client_secret_entry.insert(0, SpotClientSecret)
-client_secret_entry.pack()
-
-tk.Label(root, text="Spotify Playlist URL").pack()
-url_entry = tk.Entry(root, width=85)
-url_entry.pack()
-
+# Folder Selection
+tk.Label(root, text="Download Folder:").pack(pady=5)
 folder_path = tk.StringVar()
-tk.Label(root, text="Download Folder").pack()
-tk.Entry(root, textvariable=folder_path, width=70, state="readonly").pack()
-tk.Button(root, text="Choose Folder", command=lambda: folder_path.set(filedialog.askdirectory())).pack()
+folder_entry = tk.Entry(root, textvariable=folder_path, width=45, state="readonly")
+folder_entry.pack(pady=5)
+tk.Button(root, text="Choose Folder", command=choose_folder).pack(pady=5)
 
-tk.Button(root, text="Download Playlist", bg="green", fg="white", command=download_playlist).pack(pady=10)
+# Resolution Selection (Dropdown)
+tk.Label(root, text="Select Video Resolution:").pack(pady=5)
+resolution_var = tk.StringVar(value="1080p (Full HD)")
+resolution_dropdown = ttk.Combobox(root, textvariable=resolution_var, values=list(RESOLUTIONS.keys()), state="readonly")
+resolution_dropdown.pack(pady=5)
 
-console_text = scrolledtext.ScrolledText(root, width=100, height=28)
-console_text.pack()
+# Download Button
+download_button = tk.Button(root, text="Download Playlist", command=download_playlist, bg="red", fg="white")
+download_button.pack(pady=10)
 
+# Console Output
+tk.Label(root, text="Download Console:").pack(pady=5)
+console_text = scrolledtext.ScrolledText(root, width=70, height=10, state="normal")
+console_text.pack(pady=5)
+
+# Status Label
+status_label = tk.Label(root, text="", fg="black")
+status_label.pack(pady=5)
+
+# Run the GUI
 root.mainloop()
+
